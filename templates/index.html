@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Downloader</title>
+<style>
+  :root { font-family: system-ui, sans-serif; max-width: 860px; margin: 0 auto; padding: 1rem; }
+  .row { display: flex; gap: .5rem; margin: .75rem 0; flex-wrap: wrap; }
+  input[type=text] { flex: 1; min-width: 240px; padding: .6rem; font-size: 1rem; }
+  button { padding: .6rem 1rem; font-size: 1rem; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  fieldset { border: 1px solid #ccc; padding: .75rem; }
+  #status { min-height: 1.5em; margin: .5rem 0; }
+  #status.error { color: #b00020; }
+  .card { display: flex; gap: .75rem; border: 1px solid #ddd; border-radius: 8px;
+          padding: .75rem; margin: .5rem 0; align-items: center; }
+  .card img { width: 160px; height: 90px; object-fit: cover; border-radius: 4px; background: #eee; }
+  .card .meta { flex: 1; min-width: 0; }
+  .card .meta b { display: block; overflow: hidden; text-overflow: ellipsis; }
+  .muted { color: #666; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>Video Downloader</h1>
+
+<div class="row">
+  <input id="url" type="text" placeholder="Paste a YouTube link…" autocomplete="off" spellcheck="false">
+  <button id="fetch">Fetch</button>
+</div>
+
+<fieldset>
+  <legend>Download options</legend>
+  <div class="row">
+    <label>Quality:
+      <select id="quality">
+        <option value="best">Best</option>
+        <option value="1080p">1080p</option>
+        <option value="720p">720p</option>
+        <option value="480p">480p</option>
+        <option value="360p">360p</option>
+      </select>
+    </label>
+    <label><input id="subs" type="checkbox" checked> Subtitles</label>
+    <label><input id="audio" type="checkbox"> Audio only (mp3)</label>
+  </div>
+</fieldset>
+
+<div id="status" class="muted"></div>
+<div id="results"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const statusEl = $('status'), resultsEl = $('results');
+
+function setStatus(msg, isError) {
+  statusEl.textContent = msg || '';
+  statusEl.className = isError ? 'error' : 'muted';
+}
+
+function fmtDuration(sec) {
+  if (sec == null) return '';
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+           : `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function opts() {
+  return {
+    quality: $('audio').checked ? 'best' : $('quality').value,
+    audio_only: $('audio').checked,
+    subtitles: $('subs').checked,
+  };
+}
+
+$('audio').addEventListener('change', e => { $('quality').disabled = e.target.checked; });
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') fetchInfo(); });
+$('fetch').addEventListener('click', fetchInfo);
+
+async function fetchInfo() {
+  const url = $('url').value.trim();
+  if (!url) return setStatus('Paste a YouTube URL first.', true);
+  setStatus('Fetching…');
+  resultsEl.innerHTML = '';
+  $('fetch').disabled = true;
+  try {
+    const r = await fetch('/api/info', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const data = await r.json();
+    if (!r.ok) return setStatus(data.error || 'Fetch failed.', true);
+    setStatus('');
+    if (data.type === 'playlist') renderPlaylist(data);
+    else renderVideo(data, null);
+  } catch (e) {
+    setStatus('Network error: ' + e.message, true);
+  } finally {
+    $('fetch').disabled = false;
+  }
+}
+
+function card(item, tag) {
+  const div = document.createElement('div');
+  div.className = 'card';
+  const dur = fmtDuration(item.duration);
+  div.innerHTML =
+    (item.thumbnail ? `<img src="${item.thumbnail}" alt="" loading="lazy">` : '') +
+    `<div class="meta"><b></b>
+     <span class="muted">${tag || ''}${dur ? ' · ' + dur : ''}</span></div>`;
+  div.querySelector('b').textContent = item.title || 'Untitled';
+  const btn = document.createElement('button');
+  btn.textContent = 'Download';
+  btn.addEventListener('click', () => downloadVideo(item.url || $('url').value.trim(), btn));
+  div.appendChild(btn);
+  return div;
+}
+
+function renderVideo(video) {
+  resultsEl.appendChild(card(video, video.uploader || 'Video'));
+}
+
+function renderPlaylist(pl) {
+  const h = document.createElement('p');
+  h.innerHTML = `<b></b> <span class="muted">· ${pl.count} videos — pick quality/options above, then download any video.</span>`;
+  h.querySelector('b').textContent = pl.title;
+  resultsEl.appendChild(h);
+  pl.entries.forEach(e => resultsEl.appendChild(card(e, null)));
+}
+
+async function downloadVideo(url, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Downloading…';
+  setStatus('Downloading… this can take a while for long videos.');
+  try {
+    const r = await fetch('/api/download', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url, ...opts()}),
+    });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      return setStatus(data.error || 'Download failed.', true);
+    }
+    const blob = await r.blob();
+    let name = 'download';
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+    if (m) name = decodeURIComponent(m[1].replace(/"$/, ''));
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    setStatus('Saved: ' + name);
+  } catch (e) {
+    setStatus('Network error: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+</script>
+</body>
+</html>

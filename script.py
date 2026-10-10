@@ -78,6 +78,8 @@ def parse_args(argv=None):
                    help="Keep downloaded subtitle sidecars (.vtt) instead of deleting after embed")
     p.add_argument("--keep-thumbnail", action="store_true",
                    help="Keep thumbnail sidecars (.webp/.jpg) instead of deleting after embed")
+    p.add_argument("--no-subs", action="store_true",
+                   help="Skip subtitles entirely (no download, no embed)")
     p.add_argument("--cookies-from-browser", default=None,
                    help="e.g. chrome, firefox — use browser cookies for age-restricted videos")
     return p.parse_args(argv)
@@ -114,6 +116,7 @@ def build_outtmpl(outdir, is_playlist):
 
 
 def build_ydl_opts(args, tracker, outtmpl):
+    want_subs = not getattr(args, "no_subs", False)
     if args.audio_only:
         postprocessors = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"},
@@ -122,18 +125,20 @@ def build_ydl_opts(args, tracker, outtmpl):
         ]
     else:
         postprocessors = [
-            {"key": "FFmpegEmbedSubtitle", "already_have_subtitle": False},
             {"key": "FFmpegMetadata"},
             {"key": "EmbedThumbnail"},
         ]
+        if want_subs:
+            # Embed must come before metadata so tracks are tagged correctly.
+            postprocessors.insert(0, {"key": "FFmpegEmbedSubtitle", "already_have_subtitle": False})
 
     opts = {
         "outtmpl": outtmpl,
         "format": build_format(args),
         "merge_output_format": "mp4" if not args.audio_only else None,
         "postprocessors": postprocessors,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
+        "writesubtitles": want_subs,
+        "writeautomaticsub": want_subs,
         "subtitleslangs": ["en"],
         "writethumbnail": True,
         # Sanitize filenames; trim very long titles.
