@@ -17,6 +17,7 @@ Downloads run in background threads as jobs:
 import re
 import secrets
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -137,6 +138,11 @@ def prune_jobs():
                 shutil.rmtree(job.dest, ignore_errors=True)
 
 
+def log_error(context, exc):
+    # Full detail stays in the server log; clients only get generic messages.
+    print(f"[downloader] {context}: {exc!r}", file=sys.stderr)
+
+
 def is_youtube_url(url):
     try:
         host = (urlparse(url).hostname or "").lower()
@@ -240,17 +246,18 @@ def run_video_job(job, url, quality, audio_only, subtitles):
         cleanup_sidecars(str(dest))
         media = biggest_media(dest)
         if not media:
-            raise RuntimeError("no file produced (unsupported or removed video?)")
+            raise RuntimeError("no file produced")
         with job.lock:
             job.filepath = media
             job.filename = media.name
             job.percent = 100.0
             job.status = "done"
     except Exception as e:
+        log_error(f"video job {job.id}", e)
         shutil.rmtree(dest, ignore_errors=True)
         with job.lock:
             job.status = "error"
-            job.error = str(e)[:300]
+            job.error = "Download failed. The video may be private, removed, or unavailable."
 
 
 def run_zip_job(job, entries, playlist_title, quality, audio_only, subtitles):
@@ -279,8 +286,10 @@ def run_zip_job(job, entries, playlist_title, quality, audio_only, subtitles):
                 else:
                     raise RuntimeError("no file produced")
             except Exception as e:
+                log_error(f"zip job {job.id} entry {entry['url']}", e)
                 with job.lock:
-                    job.failed.append(f"{entry.get('title') or entry['url']}: {e}"[:200])
+                    # Title only: never expose backend tracebacks/paths.
+                    job.failed.append((entry.get("title") or entry["url"])[:200])
             finally:
                 shutil.rmtree(subdir, ignore_errors=True)
             with job.lock:
@@ -302,16 +311,17 @@ def run_zip_job(job, entries, playlist_title, quality, audio_only, subtitles):
                 # An empty ZIP is still ~22 bytes, so count entries instead.
                 zip_path.unlink(missing_ok=True)
                 job.status = "error"
-                job.error = "All videos failed; ZIP is empty."
+                job.error = "All videos failed, so there was nothing to pack."
             else:
                 job.filepath = zip_path
                 job.filename = zip_name
                 job.percent = 100.0
                 job.status = "done"
     except Exception as e:
+        log_error(f"zip job {job.id}", e)
         with job.lock:
             job.status = "error"
-            job.error = str(e)[:300]
+            job.error = "Something went wrong while building your download."
     if job.status == "error":
         shutil.rmtree(dest, ignore_errors=True)
 
@@ -353,7 +363,8 @@ def api_info():
     except ValueError as e:
         return jsonify({"error": str(e)}), 422
     except Exception as e:
-        return jsonify({"error": f"Could not fetch that URL: {e}"}), 502
+        log_error("fetch info", e)
+        return jsonify({"error": "Could not fetch that link. Check it and try again."}), 502
 
 
 @app.post("/api/jobs")
@@ -410,7 +421,7 @@ def api_job_file(job_id):
         return jsonify({"error": "Unknown or expired job."}), 404
     snap = job.snapshot()
     if snap["status"] == "error":
-        return jsonify({"error": snap["error"] or "Download failed."}), 502
+        return jsonify({"error": snap["error"] or "Download failed. Please try again."}), 502
     if snap["status"] != "done" or not job.filepath or not job.filepath.is_file():
         return jsonify({"error": "Not ready yet."}), 409
     path, dest, filename = job.filepath, job.dest, job.filename

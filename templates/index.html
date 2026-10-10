@@ -6,19 +6,31 @@
 <title>Video Downloader</title>
 <style>
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     color: #e8eaf0;
     background:
       radial-gradient(900px 400px at 15% -5%, rgba(255, 60, 60, .14), transparent 60%),
       radial-gradient(800px 400px at 90% 0%, rgba(90, 100, 255, .16), transparent 60%),
       #0e1117;
-    min-height: 100vh;
   }
-  .wrap { max-width: 900px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  /* Centered hero: header + input + options sit in the middle of the page.
+     Once results arrive, body.has-results pins everything to the top and
+     the preview renders underneath. */
+  .wrap {
+    width: 100%; max-width: 900px; margin: 0 auto;
+    padding: 1.5rem 1.25rem 5rem;
+    flex: 1;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  body.has-results .wrap { justify-content: flex-start; padding-top: 2.5rem; }
 
-  header.hero { display: flex; gap: 1rem; align-items: center; margin-bottom: 1.5rem; }
+  header.hero { display: flex; gap: 1rem; align-items: center; justify-content: center; text-align: left; margin-bottom: 1.5rem; }
   .logo {
     width: 52px; height: 52px; border-radius: 16px; flex: none;
     background: linear-gradient(135deg, #ff3b3b, #b3122e);
@@ -38,6 +50,7 @@
   }
   .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
   .search { margin-bottom: 1rem; }
+  fieldset .row { justify-content: center; }
   input[type=text] {
     flex: 1; min-width: 240px;
     padding: .8rem 1rem; font-size: 1rem; color: #e8eaf0;
@@ -81,14 +94,31 @@
   select:disabled { opacity: .45; cursor: not-allowed; }
   select option { color: #111; }
 
-  #status { min-height: 1.5em; margin: .4rem 0 .8rem; font-size: .95rem; }
-  #status.muted:empty { display: none; }
+  #status { min-height: 1.5em; margin: .4rem 0 .8rem; font-size: .95rem; text-align: center; }
+  #status:empty { display: none; }
   #status.muted { color: #9fe6a0; }
-  #status.error {
-    color: #ffb4b4; background: rgba(255, 60, 60, .1);
-    border: 1px solid rgba(255, 60, 60, .35);
-    border-radius: 10px; padding: .6rem .9rem;
+
+  /* Error popups: fixed overlay, never shift the page layout. */
+  #toasts {
+    position: fixed; bottom: 1.4rem; left: 50%; transform: translateX(-50%);
+    z-index: 50; display: flex; flex-direction: column; gap: .5rem; align-items: center;
+    pointer-events: none;
   }
+  .toast {
+    pointer-events: auto;
+    display: flex; gap: .8rem; align-items: center;
+    max-width: min(90vw, 560px);
+    background: #2a1216; color: #ffd9dc;
+    border: 1px solid rgba(255, 90, 100, .5); border-radius: 12px;
+    padding: .7rem 1rem; font-size: .92rem;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+    animation: rise .25s ease;
+  }
+  .toast button {
+    background: none; border: none; box-shadow: none;
+    color: inherit; padding: .1rem .35rem; font-size: 1rem; line-height: 1;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 
   .pl-head { margin: 1.2rem 0 .4rem; }
   .pl-head p { margin: 0 0 .7rem; font-size: 1.05rem; }
@@ -119,7 +149,16 @@
   .prog .plabel { font-size: .78rem; color: #c7cdd8; white-space: nowrap; min-width: 120px; }
   #zipbar { margin: .7rem 0; max-width: 520px; }
 
-  footer { margin-top: 2.5rem; text-align: center; color: #5d6675; font-size: .8rem; }
+  footer {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    padding: .8rem; text-align: center;
+    color: #5d6675; font-size: .8rem;
+    background: linear-gradient(transparent, rgba(14, 17, 23, .9));
+    pointer-events: none;
+  }
+
+  @keyframes fadeSlide { from { opacity: 0; transform: translateY(8px); } }
+  #results .card, #results .pl-head { animation: fadeSlide .3s ease; }
 
   @media (max-width: 600px) {
     .card { flex-wrap: wrap; }
@@ -170,16 +209,35 @@
 
   <div id="results"></div>
 
+  <div id="toasts" aria-live="polite"></div>
+
   <footer>Runs locally · files download straight to your device</footer>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
-const statusEl = $('status'), resultsEl = $('results');
+const statusEl = $('status'), resultsEl = $('results'), toastsEl = $('toasts');
+
+function toast(msg) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  const span = document.createElement('span');
+  span.textContent = msg || 'Something went wrong. Please try again.';
+  const x = document.createElement('button');
+  x.textContent = '✕';
+  x.setAttribute('aria-label', 'Dismiss');
+  x.addEventListener('click', () => el.remove());
+  el.appendChild(span);
+  el.appendChild(x);
+  toastsEl.appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+}
 
 function setStatus(msg, isError) {
+  // Errors never touch the page flow: popup only, hero stays centered.
+  if (isError) { toast(msg); return; }
   statusEl.textContent = msg || '';
-  statusEl.className = isError ? 'error' : 'muted';
+  statusEl.className = 'muted';
 }
 
 function fmtDuration(sec) {
@@ -263,6 +321,7 @@ async function fetchInfo() {
   if (!url) return setStatus('Paste a YouTube URL first.', true);
   setStatus('Fetching…');
   resultsEl.innerHTML = '';
+  document.body.classList.remove('has-results');
   $('fetch').disabled = true;
   try {
     const r = await fetch('/api/info', {
@@ -271,7 +330,12 @@ async function fetchInfo() {
     });
     const data = await r.json();
     if (!r.ok) return setStatus(data.error || 'Fetch failed.', true);
+    if (data.type === 'playlist' && !data.count) {
+      return setStatus('No videos found in that playlist.', true);
+    }
     setStatus('');
+    // Preview goes underneath: pin the hero to the top.
+    document.body.classList.add('has-results');
     if (data.type === 'playlist') renderPlaylist(data);
     else resultsEl.appendChild(card(data, data.uploader || 'Video'));
   } catch (e) {
