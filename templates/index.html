@@ -6,7 +6,7 @@
 <title>Video Downloader</title>
 <style>
   :root { font-family: system-ui, sans-serif; max-width: 860px; margin: 0 auto; padding: 1rem; }
-  .row { display: flex; gap: .5rem; margin: .75rem 0; flex-wrap: wrap; }
+  .row { display: flex; gap: .5rem; margin: .75rem 0; flex-wrap: wrap; align-items: center; }
   input[type=text] { flex: 1; min-width: 240px; padding: .6rem; font-size: 1rem; }
   button { padding: .6rem 1rem; font-size: 1rem; cursor: pointer; }
   button:disabled { opacity: .5; cursor: wait; }
@@ -19,6 +19,10 @@
   .card .meta { flex: 1; min-width: 0; }
   .card .meta b { display: block; overflow: hidden; text-overflow: ellipsis; }
   .muted { color: #666; font-size: .9rem; }
+  .prog { display: flex; gap: .5rem; align-items: center; margin-top: .4rem; }
+  .prog progress { flex: 1; height: 1.1rem; }
+  .prog .plabel { font-size: .8rem; color: #444; white-space: nowrap; }
+  #zipbar { margin: .5rem 0; }
 </style>
 </head>
 <body>
@@ -78,6 +82,62 @@ $('audio').addEventListener('change', e => { $('quality').disabled = e.target.ch
 $('url').addEventListener('keydown', e => { if (e.key === 'Enter') fetchInfo(); });
 $('fetch').addEventListener('click', fetchInfo);
 
+// ---- job helpers: start -> poll progress -> save file ----
+
+async function startJob(payload) {
+  const r = await fetch('/api/jobs', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Could not start download.');
+  return data.job_id;
+}
+
+function pollJob(jobId, onTick) {
+  return new Promise((resolve, reject) => {
+    const timer = setInterval(async () => {
+      try {
+        const r = await fetch('/api/jobs/' + jobId);
+        const s = await r.json();
+        if (!r.ok) { clearInterval(timer); reject(new Error(s.error || 'Job lost.')); return; }
+        onTick(s);
+        if (s.status === 'done') { clearInterval(timer); resolve(s); }
+        else if (s.status === 'error') { clearInterval(timer); reject(new Error(s.error || 'Download failed.')); }
+      } catch (e) {
+        clearInterval(timer);
+        reject(e);
+      }
+    }, 500);
+  });
+}
+
+function saveJobFile(jobId, fallbackName) {
+  const a = document.createElement('a');
+  a.href = '/api/jobs/' + jobId + '/file';
+  a.download = fallbackName || 'download';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function tickBar(bar, label, s) {
+  if (s.kind === 'zip') {
+    const base = (s.current / Math.max(s.total, 1)) * 100;
+    const val = s.status === 'zipping' ? 100 : base + (s.percent || 0) / Math.max(s.total, 1);
+    bar.value = Math.min(val, 100);
+    label.textContent = s.status === 'zipping' ? 'Packing ZIP…'
+      : `${s.current}/${s.total} · ${Math.round(s.percent || 0)}%` +
+        (s.speed ? ` · ${s.speed}` : '');
+  } else {
+    bar.value = s.percent || 0;
+    label.textContent = `${Math.round(s.percent || 0)}%` +
+      (s.speed ? ` · ${s.speed}` : '') + (s.eta ? ` · ETA ${s.eta}` : '');
+  }
+}
+
+// ---- rendering ----
+
 async function fetchInfo() {
   const url = $('url').value.trim();
   if (!url) return setStatus('Paste a YouTube URL first.', true);
@@ -93,12 +153,20 @@ async function fetchInfo() {
     if (!r.ok) return setStatus(data.error || 'Fetch failed.', true);
     setStatus('');
     if (data.type === 'playlist') renderPlaylist(data);
-    else renderVideo(data, null);
+    else resultsEl.appendChild(card(data, data.uploader || 'Video'));
   } catch (e) {
     setStatus('Network error: ' + e.message, true);
   } finally {
     $('fetch').disabled = false;
   }
+}
+
+function progressEls() {
+  const wrap = document.createElement('div');
+  wrap.className = 'prog';
+  wrap.hidden = true;
+  wrap.innerHTML = '<progress max="100" value="0"></progress><span class="plabel muted"></span>';
+  return [wrap, wrap.querySelector('progress'), wrap.querySelector('.plabel')];
 }
 
 function card(item, tag) {
@@ -110,54 +178,71 @@ function card(item, tag) {
     `<div class="meta"><b></b>
      <span class="muted">${tag || ''}${dur ? ' · ' + dur : ''}</span></div>`;
   div.querySelector('b').textContent = item.title || 'Untitled';
+  const [wrap, bar, label] = progressEls();
+  div.querySelector('.meta').appendChild(wrap);
   const btn = document.createElement('button');
   btn.textContent = 'Download';
-  btn.addEventListener('click', () => downloadVideo(item.url || $('url').value.trim(), btn));
+  btn.addEventListener('click', () => downloadVideo(item.url || $('url').value.trim(), btn, bar, label, wrap));
   div.appendChild(btn);
   return div;
 }
 
-function renderVideo(video) {
-  resultsEl.appendChild(card(video, video.uploader || 'Video'));
-}
-
 function renderPlaylist(pl) {
-  const h = document.createElement('p');
-  h.innerHTML = `<b></b> <span class="muted">· ${pl.count} videos — pick quality/options above, then download any video.</span>`;
+  const h = document.createElement('div');
+  h.innerHTML = '<p><b></b> <span class="muted"></span></p>';
   h.querySelector('b').textContent = pl.title;
+  h.querySelector('span').textContent = `· ${pl.count} videos — set options above, then download one video or grab all as a ZIP.`;
+  const zipBtn = document.createElement('button');
+  zipBtn.textContent = 'Download all as ZIP';
+  const [wrap, bar, label] = progressEls();
+  wrap.id = 'zipbar';
+  h.appendChild(zipBtn);
+  h.appendChild(wrap);
   resultsEl.appendChild(h);
+  zipBtn.addEventListener('click', () => downloadZip(pl, zipBtn, bar, label, wrap));
   pl.entries.forEach(e => resultsEl.appendChild(card(e, null)));
 }
 
-async function downloadVideo(url, btn) {
+async function downloadVideo(url, btn, bar, label, wrap) {
   const orig = btn.textContent;
   btn.disabled = true;
-  btn.textContent = 'Downloading…';
-  setStatus('Downloading… this can take a while for long videos.');
+  wrap.hidden = false;
+  bar.value = 0;
+  label.textContent = 'Starting…';
   try {
-    const r = await fetch('/api/download', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({url, ...opts()}),
-    });
-    if (!r.ok) {
-      const data = await r.json().catch(() => ({}));
-      return setStatus(data.error || 'Download failed.', true);
-    }
-    const blob = await r.blob();
-    let name = 'download';
-    const cd = r.headers.get('Content-Disposition') || '';
-    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
-    if (m) name = decodeURIComponent(m[1].replace(/"$/, ''));
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    setStatus('Saved: ' + name);
+    const jobId = await startJob({type: 'video', url, ...opts()});
+    const done = await pollJob(jobId, s => tickBar(bar, label, s));
+    saveJobFile(jobId, done.filename);
+    setStatus('Saved: ' + (done.filename || 'video'));
+    wrap.hidden = true;
   } catch (e) {
-    setStatus('Network error: ' + e.message, true);
+    setStatus(e.message, true);
+    label.textContent = 'Failed';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+async function downloadZip(pl, btn, bar, label, wrap) {
+  const orig = btn.textContent;
+  const urls = pl.entries.filter(e => e.url).map(e => ({url: e.url, title: e.title}));
+  if (!urls.length) return setStatus('No downloadable entries in this playlist.', true);
+  btn.disabled = true;
+  wrap.hidden = false;
+  bar.value = 0;
+  label.textContent = 'Starting…';
+  try {
+    const jobId = await startJob({type: 'zip', urls, playlist_title: pl.title, ...opts()});
+    const done = await pollJob(jobId, s => tickBar(bar, label, s));
+    saveJobFile(jobId, done.filename);
+    const fails = done.failed || [];
+    setStatus('Saved: ' + (done.filename || 'playlist.zip') +
+      (fails.length ? ` (${fails.length} failed: ${fails.slice(0, 3).join('; ')})` : ''));
+    if (!fails.length) wrap.hidden = true;
+  } catch (e) {
+    setStatus(e.message, true);
+    label.textContent = 'Failed';
   } finally {
     btn.disabled = false;
     btn.textContent = orig;

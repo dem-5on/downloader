@@ -30,3 +30,6 @@ cleaned up automatically unless `--keep-subs` / `--keep-thumbnail` is passed.
 
 Paste a YouTube link, preview the video or every entry in a playlist,
 pick quality / subtitles / audio-only, then download straight to your device.
+Each download shows a live progress bar (percent, speed, ETA).
+Playlists can be downloaded one video at a time or all at once as a ZIP
+(failed entries are listed, not fatal).
