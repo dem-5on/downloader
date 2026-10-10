@@ -28,7 +28,27 @@
     flex: 1;
     display: flex; flex-direction: column; justify-content: center;
   }
-  body.has-results .wrap { justify-content: flex-start; padding-top: 2.5rem; }
+  body.has-results .wrap { justify-content: flex-start; padding-top: 2.5rem; max-width: 1280px; }
+
+  /* Split view: controls dock left, previews take the right side. */
+  .layout { width: 100%; display: flex; flex-direction: column; max-width: 680px; margin: 0 auto; }
+  body.has-results .layout {
+    flex-direction: row; max-width: none; margin: 0;
+    align-items: flex-start; gap: 1.5rem;
+  }
+  .sidebar { width: 100%; min-width: 0; }
+  body.has-results .sidebar {
+    flex: 0 0 360px;
+    position: sticky; top: 1.5rem;
+  }
+  body.has-results header.hero { justify-content: flex-start; }
+  body.has-results header.hero h1 { font-size: 1.4rem; }
+  body.has-results header.hero p { display: none; }
+  body.has-results header.hero .logo { width: 40px; height: 40px; border-radius: 12px; }
+  body.has-results .search { flex-direction: column; align-items: stretch; }
+  body.has-results fieldset .row { justify-content: flex-start; }
+  #results { width: 100%; min-width: 0; }
+  body.has-results #results { flex: 1; }
 
   header.hero { display: flex; gap: 1rem; align-items: center; justify-content: center; text-align: left; margin-bottom: 1.5rem; }
   .logo {
@@ -166,48 +186,57 @@
     .card button { width: 100%; }
     header.hero h1 { font-size: 1.5rem; }
   }
+  /* Narrow screens: stack even with results; sidebar unsticks. */
+  @media (max-width: 900px) {
+    body.has-results .layout { flex-direction: column; }
+    body.has-results .sidebar { flex: none; position: static; }
+    body.has-results .search { flex-direction: row; align-items: center; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div class="layout">
+    <div class="sidebar">
+      <header class="hero">
+        <div class="logo" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.5v13l11-6.5z"/></svg>
+        </div>
+        <div>
+          <h1>Video Downloader</h1>
+          <p>Paste a YouTube link, preview it, pick your options, download.</p>
+        </div>
+      </header>
 
-  <header class="hero">
-    <div class="logo" aria-hidden="true">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.5v13l11-6.5z"/></svg>
-    </div>
-    <div>
-      <h1>Video Downloader</h1>
-      <p>Paste a YouTube link, preview it, pick your options, download.</p>
-    </div>
-  </header>
-
-  <div class="panel search row">
-    <input id="url" type="text" placeholder="Paste a YouTube link…" autocomplete="off" spellcheck="false">
-    <button id="fetch">Fetch</button>
-  </div>
-
-  <fieldset>
-    <div class="panel">
-      <p class="opts-title">Download options</p>
-      <div class="row">
-        <label class="pill">Quality:
-          <select id="quality">
-            <option value="best">Best</option>
-            <option value="1080p">1080p</option>
-            <option value="720p">720p</option>
-            <option value="480p">480p</option>
-            <option value="360p">360p</option>
-          </select>
-        </label>
-        <label class="pill"><input id="subs" type="checkbox" checked> Subtitles</label>
-        <label class="pill"><input id="audio" type="checkbox"> Audio only (mp3)</label>
+      <div class="panel search row">
+        <input id="url" type="text" placeholder="Paste a YouTube link…" autocomplete="off" spellcheck="false">
+        <button id="fetch">Fetch</button>
       </div>
+
+      <fieldset>
+        <div class="panel">
+          <p class="opts-title">Download options</p>
+          <div class="row">
+            <label class="pill">Quality:
+              <select id="quality">
+                <option value="best">Best</option>
+                <option value="1080p">1080p</option>
+                <option value="720p">720p</option>
+                <option value="480p">480p</option>
+                <option value="360p">360p</option>
+              </select>
+            </label>
+            <label class="pill"><input id="subs" type="checkbox" checked> Subtitles</label>
+            <label class="pill"><input id="audio" type="checkbox"> Audio only (mp3)</label>
+          </div>
+        </div>
+      </fieldset>
+
+      <div id="status" class="muted"></div>
     </div>
-  </fieldset>
 
-  <div id="status" class="muted"></div>
-
-  <div id="results"></div>
+    <div id="results"></div>
+  </div>
 
   <div id="toasts" aria-live="polite"></div>
 
