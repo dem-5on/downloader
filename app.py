@@ -50,6 +50,10 @@ YOUTUBE_HOSTS = {
 
 MEDIA_EXTS = {".mp4", ".mkv", ".webm", ".m4a", ".mp3", ".opus"}
 
+# Browsers yt-dlp can read cookies from (needs that browser installed
+# where the server runs; used for age-restricted / 403-prone videos).
+COOKIE_BROWSERS = {"chrome", "chromium", "firefox", "edge", "brave", "vivaldi", "opera"}
+
 MEDIA_MIME = {
     ".mp4": "video/mp4",
     ".mkv": "video/x-matroska",
@@ -201,11 +205,12 @@ def fetch_info(url):
         "extract_flat": True,  # fast listing; entries carry id/title/url
         "noplaylist": False,
         "ignoreerrors": True,
+        "js_runtimes": {"node": {}, "deno": {}},
     }) as ydl:
         return ydl.extract_info(url, download=False)
 
 
-def ydl_opts_for(dest, job, quality, audio_only, subtitles):
+def ydl_opts_for(dest, job, quality, audio_only, subtitles, cookies_from_browser=None):
     args = SimpleNamespace(
         quality=quality,
         audio_only=audio_only,
@@ -213,7 +218,7 @@ def ydl_opts_for(dest, job, quality, audio_only, subtitles):
         out=str(dest),
         keep_subs=False,
         keep_thumbnail=False,
-        cookies_from_browser=None,
+        cookies_from_browser=cookies_from_browser,
         no_subs=not subtitles,
     )
     tracker = DownloadTracker()
@@ -237,11 +242,11 @@ def sanitize_name(name, default="download"):
     return clean or default
 
 
-def run_video_job(job, url, quality, audio_only, subtitles):
+def run_video_job(job, url, quality, audio_only, subtitles, cookies_from_browser=None):
     dest = Path(tempfile.mkdtemp(prefix="ytui-"))
     job.dest = dest
     try:
-        with yt_dlp.YoutubeDL(ydl_opts_for(dest, job, quality, audio_only, subtitles)) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts_for(dest, job, quality, audio_only, subtitles, cookies_from_browser)) as ydl:
             ydl.download([url])
         cleanup_sidecars(str(dest))
         media = biggest_media(dest)
@@ -260,7 +265,7 @@ def run_video_job(job, url, quality, audio_only, subtitles):
             job.error = "Download failed. The video may be private, removed, or unavailable."
 
 
-def run_zip_job(job, entries, playlist_title, quality, audio_only, subtitles):
+def run_zip_job(job, entries, playlist_title, quality, audio_only, subtitles, cookies_from_browser=None):
     dest = Path(tempfile.mkdtemp(prefix="ytui-"))
     job.dest = dest
     try:
@@ -275,7 +280,7 @@ def run_zip_job(job, entries, playlist_title, quality, audio_only, subtitles):
             subdir.mkdir()
             try:
                 with yt_dlp.YoutubeDL(
-                    ydl_opts_for(subdir, job, quality, audio_only, subtitles)
+                    ydl_opts_for(subdir, job, quality, audio_only, subtitles, cookies_from_browser)
                 ) as ydl:
                     ydl.download([entry["url"]])
                 cleanup_sidecars(str(subdir))
@@ -374,6 +379,9 @@ def api_create_job():
     quality = data.get("quality") or "best"
     audio_only = bool(data.get("audio_only"))
     subtitles = bool(data.get("subtitles", True))
+    cookies_from_browser = (data.get("cookies_from_browser") or "").strip().lower() or None
+    if cookies_from_browser and cookies_from_browser not in COOKIE_BROWSERS:
+        return jsonify({"error": f"Unsupported browser '{cookies_from_browser}'."}), 400
     if kind not in ("video", "zip"):
         return jsonify({"error": "type must be 'video' or 'zip'."}), 400
     if quality not in QUALITY_FORMATS:
@@ -385,7 +393,7 @@ def api_create_job():
             return jsonify({"error": "Missing video URL."}), 400
         if not is_youtube_url(url):
             return jsonify({"error": "Only youtube.com / youtu.be URLs are supported."}), 400
-        job = start_job("video", lambda j: run_video_job(j, url, quality, audio_only, subtitles))
+        job = start_job("video", lambda j: run_video_job(j, url, quality, audio_only, subtitles, cookies_from_browser))
         return jsonify({"job_id": job.id})
 
     raw = data.get("urls") or []
@@ -400,7 +408,7 @@ def api_create_job():
     if len(entries) > MAX_ZIP_ENTRIES:
         return jsonify({"error": f"Too many videos (max {MAX_ZIP_ENTRIES})."}), 400
     title = (data.get("playlist_title") or "playlist").strip()
-    job = start_job("zip", lambda j: run_zip_job(j, entries, title, quality, audio_only, subtitles))
+    job = start_job("zip", lambda j: run_zip_job(j, entries, title, quality, audio_only, subtitles, cookies_from_browser))
     return jsonify({"job_id": job.id, "total": len(entries)})
 
 

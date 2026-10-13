@@ -141,6 +141,9 @@ def build_ydl_opts(args, tracker, outtmpl):
         "writeautomaticsub": want_subs,
         "subtitleslangs": ["en"],
         "writethumbnail": True,
+        # Use an installed JS runtime (node/deno) for YouTube's JS
+        # challenges; missing runtimes are skipped with a warning.
+        "js_runtimes": {"node": {}, "deno": {}},
         # Sanitize filenames; trim very long titles.
         "windowsfilenames": True,
         "trim_file_name": 200,

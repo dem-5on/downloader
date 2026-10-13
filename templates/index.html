@@ -228,6 +228,16 @@
             </label>
             <label class="pill"><input id="subs" type="checkbox" checked> Subtitles</label>
             <label class="pill"><input id="audio" type="checkbox"> Audio only (mp3)</label>
+        <label class="pill" title="Use a browser's YouTube cookies for age-restricted or blocked videos">Cookies:
+          <select id="cookies">
+            <option value="">None</option>
+            <option value="firefox">Firefox</option>
+            <option value="chrome">Chrome</option>
+            <option value="chromium">Chromium</option>
+            <option value="edge">Edge</option>
+            <option value="brave">Brave</option>
+          </select>
+        </label>
           </div>
         </div>
       </fieldset>
@@ -282,6 +292,7 @@ function opts() {
     quality: $('audio').checked ? 'best' : $('quality').value,
     audio_only: $('audio').checked,
     subtitles: $('subs').checked,
+    cookies_from_browser: $('cookies').value || null,
   };
 }
 

@@ -1,4 +1,6 @@
 yt-dlp>=2026.8.19
 flask>=3.0
+gunicorn>=23.0
+pytest>=8.0
 # Transcription (next step: local, offline STT for --audio-only downloads)
 faster-whisper>=1.0.0
