@@ -236,3 +236,65 @@ def test_job_error_sanitized(client, monkeypatch, no_temp_leak):
 def test_cli_uses_js_runtime():
     opts = build_ydl_opts(parse_args(["http://x"]), DownloadTracker(), "D/%(title)s.%(ext)s")
     assert opts["js_runtimes"] == {"node": {}, "deno": {}}
+
+
+def test_formats_parse():
+    import yt_dlp
+    from script import QUALITY_FORMATS
+    ydl = yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True})
+    for name, fmt in QUALITY_FORMATS.items():
+        assert ydl.build_format_selector(fmt), name
+
+
+def test_formats_prefer_h264_over_vp9_av1():
+    """Regression: 'best' must not pick VP9/AV1-in-mp4 (silent playback)."""
+    import yt_dlp
+    from script import QUALITY_FORMATS
+
+    def fmt(fid, height, vcodec, acodec, ext):
+        return {"format_id": fid, "url": f"http://x/{fid}", "ext": ext,
+                "height": height, "vcodec": vcodec, "acodec": acodec,
+                "filesize": 10_000_000, "tbr": 1000.0}
+
+    # Real-world shape: 4K VP9 and AV1 wrapped in mp4 (the silent-playback
+    # culprits), h264 only up to 1080p, plus an m4a audio track.
+    formats = [
+        fmt("628", 2160, "vp09.00.51.08", "none", "mp4"),
+        fmt("401", 2160, "av01.0.13M.08", "none", "mp4"),
+        fmt("137", 1080, "avc1.640028", "none", "mp4"),
+        fmt("136", 720, "avc1.4d401f", "none", "mp4"),
+        fmt("18", 360, "avc1.42001E", "mp4a.40.2", "mp4"),
+        fmt("140", None, "none", "mp4a.40.2", "m4a"),
+    ]
+    ydl = yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True})
+
+    def resolve(name):
+        """Return the chosen (video, audio) formats, audio may be None."""
+        video = audio = None
+        for item in ydl.build_format_selector(QUALITY_FORMATS[name])(
+                {"formats": formats, "has_merged_format": True}):
+            if isinstance(item, list):
+                vf, af = item[0], (item[1] if len(item) > 1 else None)
+            else:
+                # Pre-merged single file: carries both streams itself.
+                vf, af = item, None
+            if vf.get("vcodec") != "none":
+                video = vf
+            if af is not None and af.get("vcodec") == "none":
+                audio = af
+            elif vf.get("vcodec") != "none" and vf.get("acodec") != "none":
+                video, audio = vf, vf  # single file with both streams
+        return video, audio
+
+    # best: H.264 video (1080p here, since 4K is VP9/AV1 only) + AAC audio.
+    v, a = resolve("best")
+    assert v["vcodec"].startswith("avc1"), f"best video was {v['vcodec']}"
+    assert v["height"] <= 1080, f"best video was {v['height']}p"
+    assert a is not None and a["acodec"].startswith("mp4a"), "best lacks AAC audio"
+
+    # Each capped quality must respect its ceiling, stay on H.264, keep audio.
+    for name, cap in [("1080p", 1080), ("720p", 720), ("480p", 480), ("360p", 360)]:
+        v, a = resolve(name)
+        assert v["vcodec"].startswith("avc1"), f"{name} video was {v['vcodec']}"
+        assert v["height"] <= cap, f"{name} video was {v['height']}p"
+        assert a is not None and a["acodec"] != "none", f"{name} has no audio"

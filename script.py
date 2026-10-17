@@ -5,14 +5,37 @@ from pathlib import Path
 
 import yt_dlp
 
-# Height-capped format selectors. Best video+audio merged to mp4,
-# falling back to single-file best.
+# Format selectors, ordered from safest to richest.
+#
+# Why not just "best"? YouTube's top "bestvideo[ext=mp4]" streams are
+# VP9/AV1 wrapped in an MP4 container (e.g. 2160p VP9-in-mp4). Those
+# pair badly with an AAC track during the ffmpeg merge and play as
+# silent/black in many players, because they need a proper VP9/AV1
+# decoder. So we prefer H.264 + AAC (plays everywhere) and only fall
+# back to newer codecs when H.264 isn't offered at that height.
+def _formats(height=None):
+    cap = f"[height<={height}]" if height else ""
+    return "/".join([
+        # 1. H.264 + AAC: universally compatible.
+        f"bestvideo{cap}[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]",
+        # 2. H.264 with any audio container.
+        f"bestvideo{cap}[vcodec^=avc1]+bestaudio",
+        # 3. Pre-merged H.264 file that already carries audio.
+        f"best{cap}[vcodec^=avc1]",
+        # 4. No H.264 at this height: take VP9+Opus in WebM
+        #    (its native, compatible pairing).
+        f"bestvideo{cap}[vcodec^=vp9]+bestaudio[ext=webm]",
+        # 5. Last resort: whatever merged file exists.
+        f"best{cap}",
+    ])
+
+
 QUALITY_FORMATS = {
-    "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
-    "1080p": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-    "720p": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-    "480p": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/best",
-    "360p": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+    "best": _formats(),
+    "1080p": _formats(1080),
+    "720p": _formats(720),
+    "480p": _formats(480),
+    "360p": _formats(360),
 }
 
 AUDIO_FORMAT = "bestaudio/best"
